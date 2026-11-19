@@ -21,9 +21,6 @@ from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
 from rembg import new_session, remove
 from scipy import ndimage
 
-# =============================================================================
-# 기본 설정 및 표준 상수
-# =============================================================================
 ALLOWED_MATERIALS = ["마닐라지", "합지", "크라프트지", "수입지"]
 
 FACTORY_PROCESSES = [
@@ -61,7 +58,6 @@ SESSION.headers.update(HTTP_HEADERS)
 
 
 def normalize_url(url: str) -> str:
-    """상대 경로 또는 프로토콜 생략 URL을 https://fexta.co.kr 절대 URL로 정규화"""
     if not url:
         return ""
     u = url.strip()
@@ -75,7 +71,6 @@ def normalize_url(url: str) -> str:
 
 
 def fetch_html(url: str, timeout: int = 20) -> str:
-    """fexta.co.kr HTML을 인코딩 깨짐 없이 수집"""
     resp = SESSION.get(url, timeout=timeout)
     resp.raise_for_status()
     if not resp.encoding or resp.encoding.lower() == "iso-8859-1":
@@ -84,7 +79,6 @@ def fetch_html(url: str, timeout: int = 20) -> str:
 
 
 def download_image(url: str, timeout: int = 20) -> Image.Image | None:
-    """원본 이미지를 메모리(PIL Image)로 다운로드"""
     try:
         resp = SESSION.get(url, timeout=timeout)
         resp.raise_for_status()
@@ -96,11 +90,7 @@ def download_image(url: str, timeout: int = 20) -> Image.Image | None:
         return None
 
 
-# =============================================================================
-# 에이전트 1: 카페24 상품 스펙 · 고화질 이미지 · 호환 부자재 · 공장 공용 URL 수집기
-# =============================================================================
 def recommend_sub_materials(name: str, w_str: str, material: str, addon_text: str) -> dict:
-    """상품명·규격·추가구매상품 기반으로 호환 트레이 및 비닐봉투 매칭"""
     compact = re.sub(r"\s+", "", name or "")
     w = int(w_str) if str(w_str).isdigit() else 0
 
@@ -145,7 +135,6 @@ def recommend_sub_materials(name: str, w_str: str, material: str, addon_text: st
 
 
 def search_mall_thumbnail(keyword: str) -> str:
-    """자사몰 검색 결과에서 트레이/비닐봉투 기존 썸네일 URL을 직접 가져와 FTP 용량 0MB 재사용"""
     clean_kw = re.sub(r"\(.*?\)", "", keyword or "").split("·")[0].strip()
     if not clean_kw or "해당없음" in clean_kw:
         return ""
@@ -170,7 +159,6 @@ def search_mall_thumbnail(keyword: str) -> str:
 
 
 def fetch_shared_factory_urls() -> list[str]:
-    """기존 블랙쉐프(1463)·금계(3178) 상세페이지에 올라간 공장 8대 공정 공용 URL 자동 재사용"""
     reference_pages = [
         "https://fexta.co.kr/product/detail.html?product_no=1463",
         "https://fexta.co.kr/product/detail.html?product_no=3178",
@@ -197,12 +185,10 @@ def fetch_shared_factory_urls() -> list[str]:
         except Exception as exc:
             print(f"[WARN] 공장 공용 URL 탐색 스킵 ({url}): {exc}")
 
-    # 폴백: 표준 공용 WebFTP 경로
     return [f"/web/upload/detail/common/factory/{p['file']}" for p in FACTORY_PROCESSES]
 
 
 def scrape_cafe24_product(product_url: str, material_override: str = "자동 판별") -> dict:
-    """에이전트 1 메인: 카페24 상품 정보 및 모든 후보 이미지 수집"""
     print(f"[AGENT 1] 상품 페이지 접속 중: {product_url}")
     html = fetch_html(product_url)
     soup = BeautifulSoup(html, "lxml")
@@ -210,7 +196,6 @@ def scrape_cafe24_product(product_url: str, material_override: str = "자동 판
     no_match = re.search(r"product_no=(\d+)", product_url) or re.search(r"/(\d+)/?$", product_url)
     product_no = no_match.group(1) if no_match else "custom"
 
-    # 상품명 추출
     h2 = soup.select_one(".infoArea h2, .headingArea h2")
     og_title = soup.select_one('meta[property="og:title"]')
     raw_title = (
@@ -221,7 +206,6 @@ def scrape_cafe24_product(product_url: str, material_override: str = "자동 판
     clean_name = re.sub(r"\s*-\s*팩스타.*$", "", raw_title, flags=re.I)
     clean_name = clean_name.replace("(해외배송 가능상품)", "").strip() or f"팩스타 상품 (No.{product_no})"
 
-    # 기본 정보 테이블 파싱
     spec_text, pack_qty, unit_price, sale_price = "", "", "", 0
     for tr in soup.select("table tr"):
         th = tr.select_one("th")
@@ -243,7 +227,6 @@ def scrape_cafe24_product(product_url: str, material_override: str = "자동 판
             if m:
                 sale_price = int(m.group(1))
 
-    # 추가구매상품(트레이) 텍스트 파싱
     addon_el = soup.select_one(".xans-product-addproduct, #prdAddProduct")
     if addon_el:
         addon_text = addon_el.get_text(" ", strip=True)
@@ -260,7 +243,6 @@ def scrape_cafe24_product(product_url: str, material_override: str = "자동 판
     d_val = dim_match.group(2) if dim_match else "-"
     h_val = dim_match.group(3) if dim_match else "-"
 
-    # 원단 4종 표준 판별 (마닐라지 / 합지 / 크라프트지 / 수입지)
     if material_override in ALLOWED_MATERIALS:
         material = material_override
     else:
@@ -274,7 +256,6 @@ def scrape_cafe24_product(product_url: str, material_override: str = "자동 판
         else:
             material = "마닐라지"
 
-    # 입수량 / 개당가 조합
     qty_m = re.search(r"(\d{2,4})\s*(?:매|개입|개)", pack_qty or clean_name)
     qty_num = int(qty_m.group(1)) if qty_m else 0
     if not pack_qty and qty_num > 0:
@@ -287,7 +268,6 @@ def scrape_cafe24_product(product_url: str, material_override: str = "자동 판
         else (pack_qty or "1박스 묶음")
     )
 
-    # 대표 이미지 & 추가 이미지 & 본문 이미지 수집
     main_el = soup.select_one('.keyImg img, .thumbnail img, img[src*="/web/product/big/"]')
     og_img = soup.select_one('meta[property="og:image"]')
     main_img_url = normalize_url(
@@ -300,7 +280,6 @@ def scrape_cafe24_product(product_url: str, material_override: str = "자동 판
         seen.add(main_img_url)
 
     detail_img_urls = []
-    # 1) 추가 썸네일(.listImg)을 고화질 big 경로로 업그레이드
     for img in soup.select(".listImg img"):
         raw_src = img.get("ec-data-src") or img.get("data-original") or img.get("src")
         if not raw_src or re.search(r"icon_|btn_|arrow|blank", raw_src, re.I):
@@ -310,7 +289,6 @@ def scrape_cafe24_product(product_url: str, material_override: str = "자동 판
             seen.add(upgraded)
             detail_img_urls.append(upgraded)
 
-    # 2) 본문 상세 이미지(#prdDetail img)
     if prd_detail:
         for img in prd_detail.select("img"):
             raw_src = img.get("ec-data-src") or img.get("data-original") or img.get("data-src") or img.get("src")
@@ -324,7 +302,6 @@ def scrape_cafe24_product(product_url: str, material_override: str = "자동 판
                 seen.add(norm)
                 detail_img_urls.append(norm)
 
-    # 호환 부자재 및 자사몰 썸네일 자동 수집
     sub = recommend_sub_materials(clean_name, w_val, material, addon_text)
     sub_thumbs = {
         "whole": search_mall_thumbnail(sub["whole"]),
@@ -353,11 +330,7 @@ def scrape_cafe24_product(product_url: str, material_override: str = "자동 판
     }
 
 
-# =============================================================================
-# 에이전트 2: 서버 전용 AI 딥러닝 정밀 누끼(ISNet) + 뱃지 제거 + 고화질 선명화
-# =============================================================================
 def init_rembg_session():
-    """직선 패키지 모서리 분리에 강한 ISNet 신경망 모델 우선 로드"""
     try:
         print("[AGENT 2] AI 신경망 누끼 모델(isnet-general-use) 초기화 중...")
         return new_session("isnet-general-use")
@@ -367,18 +340,12 @@ def init_rembg_session():
 
 
 def remove_detached_badges_and_defringe(rgba_img: Image.Image) -> Image.Image:
-    """
-    1) 연결 요소 분석(Connected Components)으로 우측 상단 [소/중/대] 원형 뱃지 및 잡티 완벽 삭제
-    2) 어두운 패키지 테두리에 남는 흰색 경계 띠(Halo) 디프린지 처리
-    """
     arr = np.array(rgba_img.convert("RGBA"), dtype=np.uint8)
     alpha = arr[:, :, 3]
 
-    # 미세 알파 노이즈 정리
     alpha[alpha < 20] = 0
     alpha[alpha > 242] = 255
 
-    # 연결 요소 분석: 가장 큰 본체(박스) 면적의 14% 미만인 동떨어진 조각([소/중/대] 뱃지) 삭제
     binary = alpha > 35
     labeled, num_features = ndimage.label(binary)
     if num_features > 1:
@@ -390,10 +357,8 @@ def remove_detached_badges_and_defringe(rgba_img: Image.Image) -> Image.Image:
 
     arr[:, :, 3] = alpha
 
-    # 경계 디프린지 (반투명 픽셀이 배경색 흰 띠를 머금지 않도록 내부 불투명 색상을 약간 당겨옴)
     edge_mask = (alpha > 0) & (alpha < 225)
     if np.any(edge_mask):
-        # 내부 픽셀 기준 최대 필터로 RGB 보간
         solid = alpha >= 225
         for c in range(3):
             channel = arr[:, :, c]
@@ -411,22 +376,19 @@ def create_studio_highres_cutout(
     out_size: int = 1200,
     bg_mode: str = "studio",
 ) -> Image.Image:
-    """
-    원본 이미지 → AI 신경망 누끼 → [소/중/대] 뱃지 제거 → 정중앙 1200~1600px 배치
-    → Unsharp Mask 고화질 선명화 → 스튜디오 배경 + 이중 바닥 그림자 합성
-    """
-    # 1. 신경망 AI 배경 제거
-    cutout_rgba = remove(src_img.convert("RGB"), session=rembg_session, alpha_matting=True, alpha_matting_foreground_threshold=240, alpha_matting_background_threshold=15, alpha_matting_erode_size=6)
+    cutout_rgba = remove(
+        src_img.convert("RGB"),
+        session=rembg_session,
+        alpha_matting=True,
+        alpha_matting_foreground_threshold=240,
+        alpha_matting_background_threshold=15,
+        alpha_matting_erode_size=6,
+    )
     cutout_rgba = remove_detached_badges_and_defringe(cutout_rgba)
 
-    # 2. 순수 제품 본체 바운딩 박스 정밀 계산
     bbox = cutout_rgba.getbbox()
-    if bbox:
-        cropped = cutout_rgba.crop(bbox)
-    else:
-        cropped = cutout_rgba
+    cropped = cutout_rgba.crop(bbox) if bbox else cutout_rgba
 
-    # 3. 정중앙 배치 (LANCZOS 최고급 리샘플링)
     pad = int(out_size * 0.085)
     max_inner = out_size - pad * 2
     scale = min(max_inner / cropped.width, max_inner / cropped.height)
@@ -434,7 +396,6 @@ def create_studio_highres_cutout(
     new_h = max(1, int(round(cropped.height * scale)))
     resized = cropped.resize((new_w, new_h), Image.Resampling.LANCZOS)
 
-    # 4. 고화질 선명화 (Unsharp Mask + 미세 대비 보정 — 박스 인쇄 글씨 복원)
     r_ch, g_ch, b_ch, a_ch = resized.split()
     rgb_only = Image.merge("RGB", (r_ch, g_ch, b_ch))
     rgb_only = rgb_only.filter(ImageFilter.UnsharpMask(radius=1.6, percent=145, threshold=2))
@@ -450,7 +411,6 @@ def create_studio_highres_cutout(
         canvas.paste(sharpened, (draw_x, draw_y), sharpened)
         return canvas
 
-    # 5. 스튜디오 배경 생성 (방사형 라이트 그라데이션 or 순백색)
     if bg_mode == "white":
         bg = Image.new("RGBA", (out_size, out_size), (255, 255, 255, 255))
     else:
@@ -463,18 +423,15 @@ def create_studio_highres_cutout(
         a_bg = np.full((out_size, out_size), 255, dtype=np.uint8)
         bg = Image.fromarray(np.stack([r_bg, g_bg, b_bg, a_bg], axis=-1), mode="RGBA")
 
-    # 6. 현실적인 이중 바닥 그림자 (Ambient + Contact Occlusion)
     shadow_layer = Image.new("RGBA", (out_size, out_size), (0, 0, 0, 0))
     s_draw = ImageDraw.Draw(shadow_layer)
     cx = out_size // 2
     bottom_y = draw_y + new_h
 
-    # 넓은 확산 그림자
     rx1, ry1 = int(new_w * 0.42), int(out_size * 0.022)
     s_draw.ellipse([cx - rx1, bottom_y - ry1 - int(out_size * 0.008), cx + rx1, bottom_y + ry1 - int(out_size * 0.008)], fill=(18, 18, 17, 34))
     shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(radius=int(out_size * 0.02)))
 
-    # 좁은 접지 그림자
     contact_layer = Image.new("RGBA", (out_size, out_size), (0, 0, 0, 0))
     c_draw = ImageDraw.Draw(contact_layer)
     rx2, ry2 = int(new_w * 0.34), int(out_size * 0.011)
@@ -487,11 +444,7 @@ def create_studio_highres_cutout(
     return bg.convert("RGB")
 
 
-# =============================================================================
-# 에이전트 3: SEO · AEO · GEO 최적화 카피 및 4대 Q&A 생성 (Gemini API + 룰 폴백)
-# =============================================================================
 def build_seo_copy_and_qa(prod: dict) -> tuple[str, list[dict]]:
-    """Gemini API 키가 있으면 AI 생성, 없어도 패키지 제조 표준 규칙으로 100% 완성"""
     name = prod["name"]
     dim = prod["dim_text"]
     mat = prod["material"]
@@ -567,11 +520,7 @@ JSON 형식:
         return default_subcopy, fallback_qa
 
 
-# =============================================================================
-# 에이전트 4: 수석 디자이너 100% 인라인 카페24 HTML 조립기
-# =============================================================================
 def build_sub_placeholder_svg(kind: str, label: str) -> str:
-    """자사몰 부자재 썸네일 검색 실패 시 깔끔한 미니멀 벡터 폴백"""
     safe = re.sub(r'[<>&"\']', "", label or "")[:18]
     if kind == "whole":
         body = '<rect x="42" y="48" width="96" height="64" rx="7" fill="#FFFFFF" stroke="#121211" stroke-width="2.2"/><text x="90" y="84" text-anchor="middle" font-family="sans-serif" font-size="11" font-weight="800" fill="#121211">ONE TRAY</text>'
@@ -590,7 +539,6 @@ def render_cafe24_html(
     main_img_src: str,
     detail_items: list[dict],
 ) -> str:
-    """100% 인라인 스타일 · Product+FAQPage JSON-LD 포함 카페24 표준 HTML 생성"""
     name = prod["name"]
     dim_text = prod["dim_text"]
     material = prod["material"]
@@ -632,7 +580,6 @@ def render_cafe24_html(
     ]
     json_ld = f'<script type="application/ld+json">{json.dumps(structured_data, ensure_ascii=False)}</script>'
 
-    # 2x2 Q&A 카드
     qa_rows = []
     for i in range(0, len(qa_list), 2):
         left = qa_list[i]
@@ -661,7 +608,6 @@ def render_cafe24_html(
         </tr>"""
         )
 
-    # 호환 부자재 카드 (해당없음 자동 제외)
     pair_cards = []
     if sub["whole"] and "해당없음" not in sub["whole"]:
         pair_cards.append({"tag": "한마리 포장용", "title": sub["whole"], "img": thumbs["whole"] or build_sub_placeholder_svg("whole", sub["whole"])})
@@ -698,7 +644,6 @@ def render_cafe24_html(
     </table>
   </div>"""
 
-    # 04 · DETAIL 제품 고화질 누끼 갤러리
     detail_section = ""
     if detail_items:
         cards_html = "".join(
@@ -725,7 +670,6 @@ def render_cafe24_html(
     {cards_html}
   </div>"""
 
-    # 공장 8대 공정 그리드
     factory_cells = []
     for idx, proc in enumerate(FACTORY_PROCESSES):
         f_url = prod["factory_urls"][idx] if idx < len(prod["factory_urls"]) else f"/web/upload/detail/common/factory/{proc['file']}"
@@ -944,9 +888,6 @@ def render_cafe24_html(
 <!-- FEXTA 고화질 AI 누끼 · SEO/AEO/GEO 상세페이지 끝 -->"""
 
 
-# =============================================================================
-# 메인 실행 파이프라인
-# =============================================================================
 def main():
     product_url = os.environ.get("PRODUCT_URL", "").strip()
     if not product_url:
@@ -968,12 +909,10 @@ def main():
     img_dir.mkdir(parents=True, exist_ok=True)
     skipped_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. 에이전트 1 실행 (수집)
     prod = scrape_cafe24_product(product_url, material_override=material_override)
     ftp_folder = f"/web/upload/detail/product_{prod['product_no']}/"
     print(f"[AGENT 1 완료] 상품명: {prod['name']} | 규격: {prod['dim_text']} | 원단: {prod['material']}")
 
-    # 2. 에이전트 2 실행 (고화질 AI 누끼)
     rembg_session = init_rembg_session()
     uploaded_files = []
 
@@ -993,7 +932,6 @@ def main():
             main_ftp_path = prod["main_img_url"]
             main_local_rel = prod["main_img_url"]
 
-    # 본문 상세 이미지 분석: 세로 긴 구형 통이미지(ratio > 2.0) 자동 차단 + 순수 제품 컷 고화질 처리
     detail_ftp_items = []
     detail_preview_items = []
     slot_idx = 0
@@ -1008,7 +946,6 @@ def main():
         ratio = round(h / max(1, w), 2)
 
         if ratio > 2.0:
-            # 세로 긴 구형 통이미지는 본문에서 자동 제외 (참고 폴더에만 보관)
             skip_name = f"blocked_long_{len(list(skipped_dir.iterdir())) + 1}.jpg"
             raw_img.convert("RGB").save(skipped_dir / skip_name, format="JPEG", quality=88)
             print(f"[AGENT 2] 구형 통이미지 자동 제외 ({w}×{h}, 비율 {ratio}) -> {skip_name}")
@@ -1035,10 +972,8 @@ def main():
         detail_ftp_items.append({"src": f"{ftp_folder}{d_file}", "caption": caption})
         detail_preview_items.append({"src": f"upload_images/{d_file}", "caption": caption})
 
-    # 3. 에이전트 3 실행 (SEO·AEO·GEO 카피 + Q&A)
     subcopy, qa_list = build_seo_copy_and_qa(prod)
 
-    # 4. 에이전트 4 실행 (카페24 붙여넣기용 HTML + PC 검수용 미리보기 HTML + 업로드 가이드)
     cafe24_html = render_cafe24_html(prod, subcopy, qa_list, main_ftp_path, detail_ftp_items)
     preview_body = render_cafe24_html(prod, subcopy, qa_list, main_local_rel, detail_preview_items)
     preview_doc = f"""<!DOCTYPE html>
