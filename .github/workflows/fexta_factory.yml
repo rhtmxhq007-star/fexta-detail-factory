@@ -4,11 +4,11 @@ on:
 workflow_dispatch:
 inputs:
 product_url:
-description: "fexta.co.kr 상품 상세 URL (예: https://fexta.co.kr/product/detail.html?product_no=555)"
+description: "fexta.co.kr 상품 상세 URL"
 required: true
 type: string
 material_override:
-description: "재질 / 원단 선택 (자동 판별 권장)"
+description: "재질 / 원단 선택"
 required: false
 default: "자동 판별"
 type: choice
@@ -19,16 +19,16 @@ options:
 - "크라프트지"
 - "수입지"
 cutout_bg:
-description: "AI 누끼 스튜디오 배경 마감"
+description: "AI 누끼 배경 마감"
 required: false
-default: "studio (스튜디오 라이트 배경)"
+default: "studio"
 type: choice
 options:
-- "studio (스튜디오 라이트 배경)"
-- "white (순백색 배경)"
-- "transparent (투명 PNG)"
+- "studio"
+- "white"
+- "transparent"
 output_size:
-description: "출력 이미지 해상도 (px)"
+description: "출력 해상도 (px)"
 required: false
 default: "1200"
 type: choice
@@ -36,7 +36,7 @@ options:
 - "1200"
 - "1600"
 detail_cutout_mode:
-description: "상세 컷(04·DETAIL) AI 누끼 처리 여부"
+description: "상세 컷 AI 누끼 처리 여부"
 required: false
 default: "단독 제품컷 AI 누끼 변환"
 type: choice
@@ -48,26 +48,26 @@ jobs:
 build_fexta_detail:
 runs-on: ubuntu-latest
 steps:
-- name: 1. Checkout repository
+- name: Checkout repository
 uses: actions/checkout@v4
 
-  - name: 2. Setup Python 3.11
+  - name: Setup Python 3.11
     uses: actions/setup-python@v5
     with:
       python-version: "3.11"
 
-  - name: 3. Cache AI model
+  - name: Cache AI model
     uses: actions/cache@v4
     with:
       path: ~/.u2net
       key: rembg-isnet-model-v1
 
-  - name: 4. Install dependencies
+  - name: Install dependencies
     run: |
       python -m pip install --upgrade pip
       pip install requests beautifulsoup4 lxml pillow numpy scipy "rembg[cpu]" onnxruntime google-genai
 
-  - name: 5. Run FEXTA detail builder
+  - name: Run FEXTA detail builder
     env:
       PRODUCT_URL: ${{ inputs.product_url }}
       MATERIAL_OVERRIDE: ${{ inputs.material_override }}
@@ -77,7 +77,7 @@ uses: actions/checkout@v4
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
     run: python build_detail.py
 
-  - name: 6. Upload output ZIP artifact
+  - name: Upload output ZIP artifact
     uses: actions/upload-artifact@v4
     with:
       name: fexta-detail-run-${{ github.run_number }}
