@@ -1,0 +1,85 @@
+name: FEXTA 고화질 AI 누끼·상세페이지 자동 생성
+
+on:
+  workflow_dispatch:
+    inputs:
+      product_url:
+        description: "fexta.co.kr 상품 상세 URL (예: https://fexta.co.kr/product/detail.html?product_no=555)"
+        required: true
+        type: string
+      material_override:
+        description: "재질 / 원단 선택 (자동 판별 권장)"
+        required: false
+        default: "자동 판별"
+        type: choice
+        options:
+          - "자동 판별"
+          - "마닐라지"
+          - "합지"
+          - "크라프트지"
+          - "수입지"
+      cutout_bg:
+        description: "AI 누끼 스튜디오 배경 마감"
+        required: false
+        default: "studio (#F7F6F2 스튜디오)"
+        type: choice
+        options:
+          - "studio (#F7F6F2 스튜디오)"
+          - "white (#FFFFFF 순백색)"
+          - "transparent (투명 PNG)"
+      output_size:
+        description: "출력 이미지 해상도 (px)"
+        required: false
+        default: "1200"
+        type: choice
+        options:
+          - "1200"
+          - "1600"
+      detail_cutout_mode:
+        description: "상세 컷(04·DETAIL) AI 누끼 처리 여부"
+        required: false
+        default: "단독 제품컷 AI 누끼 변환 (추천)"
+        type: choice
+        options:
+          - "단독 제품컷 AI 누끼 변환 (추천)"
+          - "원본 고화질 유지 (누끼 안함)"
+
+jobs:
+  build_fexta_detail:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 1. 저장소 코드 불러오기
+        uses: actions/checkout@v4
+
+      - name: 2. Python 3.11 환경 준비
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 3. AI 누끼 신경망 모델 캐시 불러오기 (2회차부터 초고속 실행)
+        uses: actions/cache@v4
+        with:
+          path: ~/.u2net
+          key: rembg-isnet-model-v1
+
+      - name: 4. 고화질 이미지 처리 · AI 누끼 라이브러리 설치
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests beautifulsoup4 lxml pillow numpy scipy "rembg[cpu]" onnxruntime google-genai
+
+      - name: 5. 4단계 서브에이전트 상세페이지 & 고화질 AI 누끼 실행
+        env:
+          PRODUCT_URL: ${{ inputs.product_url }}
+          MATERIAL_OVERRIDE: ${{ inputs.material_override }}
+          CUTOUT_BG: ${{ inputs.cutout_bg }}
+          OUTPUT_SIZE: ${{ inputs.output_size }}
+          DETAIL_CUTOUT_MODE: ${{ inputs.detail_cutout_mode }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python build_detail.py
+
+      - name: 6. 완성된 고화질 누끼 이미지 + 카페24 HTML ZIP 묶기
+        uses: actions/upload-artifact@v4
+        with:
+          name: fexta-detail-run-${{ github.run_number }}
+          path: output/
+          retention-days: 30
