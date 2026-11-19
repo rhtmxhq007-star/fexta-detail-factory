@@ -78,7 +78,7 @@ def fetch_html(url: str, timeout: int = 20) -> str:
     return resp.text
 
 
-def download_image(url: str, timeout: int = 20) -> Image.Image | None:
+def download_image(url: str, timeout: int = 20):
     try:
         resp = SESSION.get(url, timeout=timeout)
         resp.raise_for_status()
@@ -158,7 +158,7 @@ def search_mall_thumbnail(keyword: str) -> str:
     return ""
 
 
-def fetch_shared_factory_urls() -> list[str]:
+def fetch_shared_factory_urls() -> list:
     reference_pages = [
         "https://fexta.co.kr/product/detail.html?product_no=1463",
         "https://fexta.co.kr/product/detail.html?product_no=3178",
@@ -196,10 +196,12 @@ def scrape_cafe24_product(product_url: str, material_override: str = "자동 판
     no_match = re.search(r"product_no=(\d+)", product_url) or re.search(r"/(\d+)/?$", product_url)
     product_no = no_match.group(1) if no_match else "custom"
 
+    byapps_title = soup.select_one('[data-byapps-item="title"]')
     h2 = soup.select_one(".infoArea h2, .headingArea h2")
     og_title = soup.select_one('meta[property="og:title"]')
     raw_title = (
-        (h2.get_text(strip=True) if h2 else "")
+        (byapps_title.get_text(strip=True) if byapps_title else "")
+        or (h2.get_text(strip=True) if h2 else "")
         or (og_title.get("content", "").strip() if og_title else "")
         or (soup.title.get_text(strip=True) if soup.title else "")
     )
@@ -227,18 +229,29 @@ def scrape_cafe24_product(product_url: str, material_override: str = "자동 판
             if m:
                 sale_price = int(m.group(1))
 
+    if sale_price == 0:
+        byapps_price = soup.select_one('[data-byapps-item="price"]')
+        if byapps_price:
+            m = re.search(r"(\d{3,7})", byapps_price.get_text(strip=True).replace(",", ""))
+            if m:
+                sale_price = int(m.group(1))
+
     addon_el = soup.select_one(".xans-product-addproduct, #prdAddProduct")
     if addon_el:
         addon_text = addon_el.get_text(" ", strip=True)
     else:
         addon_text = " ".join(
-            opt.get_text(strip=True) for opt in soup.select("select option")
+            opt.get_text(strip=True)
+            for opt in soup.select("select option")
             if re.search(r"트레이|봉투", opt.get_text(strip=True))
         )
 
     prd_detail = soup.select_one("#prdDetail")
     detail_head_text = prd_detail.get_text(" ", strip=True)[:1500] if prd_detail else ""
-    dim_match = re.search(r"(\d{2,3})\s*[xX×*]\s*(\d{2,3})\s*[xX×*]\s*(\d{2,3})", f"{spec_text} {clean_name} {detail_head_text}")
+    dim_match = re.search(
+        r"(\d{2,3})\s*[xX×*]\s*(\d{2,3})\s*[xX×*]\s*(\d{2,3})",
+        f"{spec_text} {clean_name} {detail_head_text}",
+    )
     w_val = dim_match.group(1) if dim_match else "-"
     d_val = dim_match.group(2) if dim_match else "-"
     h_val = dim_match.group(3) if dim_match else "-"
@@ -263,15 +276,17 @@ def scrape_cafe24_product(product_url: str, material_override: str = "자동 판
     if not unit_price and sale_price > 0 and qty_num > 0:
         unit_price = f"약 {round(sale_price / qty_num):,}원"
     qty_display = (
-        f"{pack_qty} (개당 {re.sub(r'^개당\\s*', '', unit_price)})"
+        f"{pack_qty} (개당 {re.sub(r'^개당\s*', '', unit_price)})"
         if pack_qty and unit_price
         else (pack_qty or "1박스 묶음")
     )
 
-    main_el = soup.select_one('.keyImg img, .thumbnail img, img[src*="/web/product/big/"]')
+    byapps_img = soup.select_one('[data-byapps-item="image"]')
+    main_el = soup.select_one('.keyImg img, .thumbnail img, img.BigImage, img[src*="/web/product/big/"]')
     og_img = soup.select_one('meta[property="og:image"]')
     main_img_url = normalize_url(
-        (main_el.get("src") if main_el else "")
+        (byapps_img.get_text(strip=True) if byapps_img else "")
+        or (main_el.get("src") if main_el else "")
         or (og_img.get("content") if og_img else "")
     )
 
@@ -284,7 +299,11 @@ def scrape_cafe24_product(product_url: str, material_override: str = "자동 판
         raw_src = img.get("ec-data-src") or img.get("data-original") or img.get("src")
         if not raw_src or re.search(r"icon_|btn_|arrow|blank", raw_src, re.I):
             continue
-        upgraded = normalize_url(raw_src).replace("/web/product/small/", "/web/product/big/").replace("/web/product/tiny/", "/web/product/big/")
+        upgraded = (
+            normalize_url(raw_src)
+            .replace("/web/product/small/", "/web/product/big/")
+            .replace("/web/product/tiny/", "/web/product/big/")
+        )
         if upgraded not in seen:
             seen.add(upgraded)
             detail_img_urls.append(upgraded)
@@ -296,7 +315,11 @@ def scrape_cafe24_product(product_url: str, material_override: str = "자동 판
             if not raw_src:
                 continue
             norm = normalize_url(raw_src)
-            if re.search(r"icon_|btn_|logo|naver|kakao|arrow|bullet|blank|spacer|talk|plus_id|factory|샘플커팅|옵셋인쇄|코팅기|합지기|톰슨기|자동접착|제함기|물류", f"{norm} {alt}", re.I):
+            if re.search(
+                r"icon_|btn_|logo|naver|kakao|arrow|bullet|blank|spacer|talk|plus_id|factory|샘플커팅|옵셋인쇄|코팅기|합지기|톰슨기|자동접착|제함기|물류",
+                f"{norm} {alt}",
+                re.I,
+            ):
                 continue
             if norm not in seen:
                 seen.add(norm)
@@ -365,7 +388,11 @@ def remove_detached_badges_and_defringe(rgba_img: Image.Image) -> Image.Image:
             blurred = ndimage.uniform_filter(np.where(solid, channel, 0).astype(np.float32), size=3)
             weight = ndimage.uniform_filter(solid.astype(np.float32), size=3)
             safe_fill = np.where(weight > 0.05, blurred / np.maximum(weight, 1e-5), channel)
-            arr[:, :, c] = np.where(edge_mask, np.clip(channel * 0.3 + safe_fill * 0.7, 0, 255), channel).astype(np.uint8)
+            arr[:, :, c] = np.where(
+                edge_mask,
+                np.clip(channel * 0.3 + safe_fill * 0.7, 0, 255),
+                channel,
+            ).astype(np.uint8)
 
     return Image.fromarray(arr, mode="RGBA")
 
@@ -376,14 +403,23 @@ def create_studio_highres_cutout(
     out_size: int = 1200,
     bg_mode: str = "studio",
 ) -> Image.Image:
-    cutout_rgba = remove(
-        src_img.convert("RGB"),
-        session=rembg_session,
-        alpha_matting=True,
-        alpha_matting_foreground_threshold=240,
-        alpha_matting_background_threshold=15,
-        alpha_matting_erode_size=6,
-    )
+    rgb_src = src_img.convert("RGB")
+    if max(rgb_src.size) > 2000:
+        rgb_src.thumbnail((2000, 2000), Image.Resampling.LANCZOS)
+
+    try:
+        cutout_rgba = remove(
+            rgb_src,
+            session=rembg_session,
+            alpha_matting=True,
+            alpha_matting_foreground_threshold=240,
+            alpha_matting_background_threshold=15,
+            alpha_matting_erode_size=6,
+        )
+    except Exception as exc:
+        print(f"[WARN] alpha_matting 예외 발생, 기본 정밀 모드로 재시도: {exc}")
+        cutout_rgba = remove(rgb_src, session=rembg_session)
+
     cutout_rgba = remove_detached_badges_and_defringe(cutout_rgba)
 
     bbox = cutout_rgba.getbbox()
@@ -415,7 +451,10 @@ def create_studio_highres_cutout(
         bg = Image.new("RGBA", (out_size, out_size), (255, 255, 255, 255))
     else:
         yy, xx = np.ogrid[:out_size, :out_size]
-        dist = np.sqrt(((xx - out_size * 0.5) / (out_size * 0.72)) ** 2 + ((yy - out_size * 0.45) / (out_size * 0.72)) ** 2)
+        dist = np.sqrt(
+            ((xx - out_size * 0.5) / (out_size * 0.72)) ** 2
+            + ((yy - out_size * 0.45) / (out_size * 0.72)) ** 2
+        )
         t = np.clip(dist, 0.0, 1.0)
         r_bg = (255 * (1 - t) + 242 * t).astype(np.uint8)
         g_bg = (255 * (1 - t) + 240 * t).astype(np.uint8)
@@ -429,13 +468,19 @@ def create_studio_highres_cutout(
     bottom_y = draw_y + new_h
 
     rx1, ry1 = int(new_w * 0.42), int(out_size * 0.022)
-    s_draw.ellipse([cx - rx1, bottom_y - ry1 - int(out_size * 0.008), cx + rx1, bottom_y + ry1 - int(out_size * 0.008)], fill=(18, 18, 17, 34))
+    s_draw.ellipse(
+        [cx - rx1, bottom_y - ry1 - int(out_size * 0.008), cx + rx1, bottom_y + ry1 - int(out_size * 0.008)],
+        fill=(18, 18, 17, 34),
+    )
     shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(radius=int(out_size * 0.02)))
 
     contact_layer = Image.new("RGBA", (out_size, out_size), (0, 0, 0, 0))
     c_draw = ImageDraw.Draw(contact_layer)
     rx2, ry2 = int(new_w * 0.34), int(out_size * 0.011)
-    c_draw.ellipse([cx - rx2, bottom_y - ry2 - int(out_size * 0.004), cx + rx2, bottom_y + ry2 - int(out_size * 0.004)], fill=(18, 18, 17, 46))
+    c_draw.ellipse(
+        [cx - rx2, bottom_y - ry2 - int(out_size * 0.004), cx + rx2, bottom_y + ry2 - int(out_size * 0.004)],
+        fill=(18, 18, 17, 46),
+    )
     contact_layer = contact_layer.filter(ImageFilter.GaussianBlur(radius=int(out_size * 0.008)))
 
     bg = Image.alpha_composite(bg, shadow_layer)
@@ -444,7 +489,7 @@ def create_studio_highres_cutout(
     return bg.convert("RGB")
 
 
-def build_seo_copy_and_qa(prod: dict) -> tuple[str, list[dict]]:
+def build_seo_copy_and_qa(prod: dict):
     name = prod["name"]
     dim = prod["dim_text"]
     mat = prod["material"]
@@ -492,25 +537,23 @@ def build_seo_copy_and_qa(prod: dict) -> tuple[str, list[dict]]:
 
         print("[AGENT 3] Gemini API로 B2B SEO·AEO·GEO 최적화 카피 및 Q&A 생성 중...")
         client = genai.Client(api_key=api_key)
-        prompt = f"""
-당신은 B2B 식품포장재 제조사 팩스타(FEXTA)의 수석 온라인 MD입니다.
-아래 실제 상품 스펙을 바탕으로 검색엔진(SEO)과 생성형 AI(AEO/GEO)가 정확히 인용할 수 있는
-간결하고 신뢰감 있는 한 줄 요약(subcopy)과 매장 사장님 대상 Q&A 4개를 순수 JSON으로만 반환하세요.
-과장된 광고 수식어나 이모지는 절대 쓰지 마세요.
-
-- 상품명: {name}
-- 외경 규격: {dim}
-- 재질/원단: {mat}
-- 기본 입수량: {prod['quantity']}
-- 한마리 호환 트레이: {whole}
-- 반반 호환 트레이: {half}
-- 전용 비닐봉투: {prod['sub']['bag']}
-
-JSON 형식:
-{{"subcopy": "45자 이내 핵심 요약", "qa": [{{"q": "질문1", "a": "답변1"}}, {{"q": "질문2", "a": "답변2"}}, {{"q": "질문3", "a": "답변3"}}, {{"q": "질문4", "a": "답변4"}}]}}
-"""
+        prompt = (
+            "당신은 B2B 식품포장재 제조사 팩스타(FEXTA)의 수석 온라인 MD입니다.\n"
+            "아래 실제 상품 스펙을 바탕으로 검색엔진(SEO)과 생성형 AI(AEO/GEO)가 정확히 인용할 수 있는 "
+            "간결하고 신뢰감 있는 한 줄 요약(subcopy)과 매장 사장님 대상 Q&A 4개를 순수 JSON으로만 반환하세요.\n"
+            "과장된 광고 수식어나 이모지는 절대 쓰지 마세요.\n\n"
+            f"- 상품명: {name}\n"
+            f"- 외경 규격: {dim}\n"
+            f"- 재질/원단: {mat}\n"
+            f"- 기본 입수량: {prod['quantity']}\n"
+            f"- 한마리 호환 트레이: {whole}\n"
+            f"- 반반 호환 트레이: {half}\n"
+            f"- 전용 비닐봉투: {prod['sub']['bag']}\n\n"
+            'JSON 형식: {"subcopy": "45자 이내 핵심 요약", "qa": [{"q": "질문1", "a": "답변1"}, {"q": "질문2", "a": "답변2"}, {"q": "질문3", "a": "답변3"}, {"q": "질문4", "a": "답변4"}]}'
+        )
         resp = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
-        raw_txt = re.sub(r"^```json\s*|\s*```$", "", (resp.text or "").strip())
+        raw_txt = (resp.text or "").strip()
+        raw_txt = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw_txt).strip()
         parsed = json.loads(raw_txt)
         subcopy = parsed.get("subcopy") or default_subcopy
         qa = parsed.get("qa") if isinstance(parsed.get("qa"), list) and len(parsed["qa"]) >= 4 else fallback_qa
@@ -535,9 +578,9 @@ def build_sub_placeholder_svg(kind: str, label: str) -> str:
 def render_cafe24_html(
     prod: dict,
     subcopy: str,
-    qa_list: list[dict],
+    qa_list: list,
     main_img_src: str,
-    detail_items: list[dict],
+    detail_items: list,
 ) -> str:
     name = prod["name"]
     dim_text = prod["dim_text"]
@@ -1012,7 +1055,7 @@ def main():
         "",
         "[2단계] 카페24 파일업로더(WebFTP) 이미지 업로드",
         "  - 카페24 관리자 > 디자인관리 > 디자인 부가기능 > 파일업로더(WebFTP)",
-        f"  - 아래 폴더를 만들고 'upload_images' 폴더 안의 파일들을 이름 그대로 업로드하세요:",
+        "  - 아래 폴더를 만들고 'upload_images' 폴더 안의 파일들을 이름 그대로 업로드하세요:",
         f"    ▶ 업로드 폴더: {ftp_folder}",
         "",
     ]
